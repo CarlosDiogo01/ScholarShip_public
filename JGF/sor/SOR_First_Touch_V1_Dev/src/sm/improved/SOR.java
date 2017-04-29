@@ -51,10 +51,9 @@ public class SOR
 		final int ttslice 	= (tslice + total_threads - 1) / total_threads;
 		final int slice 		= ttslice << 1;
 
-		
+		/* Applying First Touch - Using threads to Alloc and Initialize G */
 		final long begin = System.currentTimeMillis();
 		
-		/* Applying First Touch - Using threads to Alloc and Initialize G */
 		for (int i = 0; i < total_threads-1; i++){
 			final int id = i+1;			
 			th[i] = new Thread(new Runnable() {				
@@ -64,7 +63,7 @@ public class SOR
 					for (int l=chunk_start; l < chunk_end; l++)
 					{	
 							/* Allocation in Parallel */
-							G[l] = new double[M];
+							G[l] = new double[N];
 							
 							/* Initialize in Parallel */
 							for (int c=0; c<N; c++) {
@@ -80,15 +79,18 @@ public class SOR
 				}
 			});
 			th[i].start();
-		} 
+		}
 		
 		int iupper 		= slice + 1;
 		if (iupper > Mm1 || total_threads == 1) iupper =  Mm1+1;
 
-
+		G[0] = new double[N];		
+		for (int c=0; c<N; c++) {	
+			G[0][c] = R.nextDouble() * 1e-6;
+		}
+			
 		SORRunner(G, 0, omega, num_iterations, 1, iupper, Mm1, Nm1, total_threads);		
-		
-		
+	
 		for(int i = 0 ; i < total_threads-1 ; i++)
 		{
 			try 
@@ -97,7 +99,6 @@ public class SOR
 			}
 			catch (InterruptedException e) {}
 		}
-		//barrier
 		
 		final long end = System.currentTimeMillis();
 		System.out.println((end-begin) / 1000.0);
