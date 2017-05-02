@@ -22,6 +22,10 @@
 package sm.improved;
 
 import java.util.Random;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
+import java.lang.Object;
 
 public class SOR
 {
@@ -29,91 +33,142 @@ public class SOR
 	public static double Gtotal = 0.0;
 	public static final int cachelinesize = 128;
 	public static volatile long sync[][];
-	private static final long RANDOM_SEED = 10101010;
+
 	
 	SOR(int total_threads){
 		sync = new long  [total_threads][cachelinesize];
 	}
 
-	public final void SORrun(double omega, double G[][], int M, int N, int num_iterations) {		
+	public final void SORrun(double omega, double G[][], int M, int N, int num_iterations, Random R) {		
 		
-		Random R = new Random(RANDOM_SEED);
 		final int Mm1 			= M-1;
 		final int Nm1 			= N-1;
-		
-		/* Creating Threads */
+			
+		/* Creating Threads and Barrier */
 		final int total_threads = JGFSORBench.nthreads;
-		final Thread th[] 		= new Thread[total_threads-1];
+		final CyclicBarrier barrier = new CyclicBarrier(total_threads);
+		final Thread th[] 			= new Thread[total_threads-1];
 
-		final int chunk_size = M % total_threads;
+		/* Measuring time with Guava StopWatch */
+		StopWatch timerThreads	= StopWatch.createUnstarted();
+		StopWatch timerMaster	= StopWatch.createUnstarted();
 		
-		final int tslice 	= Mm1 >> 1;
-		final int ttslice 	= (tslice + total_threads - 1) / total_threads;
-		final int slice 		= ttslice << 1;
-
-		
-		final long begin = System.currentTimeMillis(); // Where should be the counter?
-		
-		/* Applying First Touch - Using threads to Alloc and Initialize G */
+		final int iterations = (Mm1+2)/2;
 		for (int i = 0; i < total_threads-1; i++){
 			final int id = i+1;			
 			th[i] = new Thread(new Runnable() {				
 				public final void run(){
-					int chunk_start = chunk_size * id;
-					int chunk_end = chunk_size * (id+1);
-					for (int l=chunk_start; l < chunk_end; l++)
-					{	
-						/* Allocation in Parallel */
-						G[l] = new double[N];
-							
-						/* Initialize in Parallel */
-						for (int c=0; c<N; c++) {
-							G[l][c] = R.nextDouble() * 1e-6;
-						}
+					
+					int iter_per_thr	= iterations / total_threads;
+					int iter_extra		= iterations % total_threads;
+					
+					if (id < iter_extra) {		//Threads that will receive the extra iterations (if any)
+						iter_extra = 0;
+						iter_per_thr++;
+						
 					}
-					final int ilow 	= id * slice + 1;
-					int iupper 		= slice + ilow;	
+					final int ilow		= (iter_per_thr * id + iter_extra) * 2+1; //begin = 1
+					final int iupper	= ilow + iter_per_thr * 2;
 					
-					if (iupper > Mm1) iupper =  Mm1+1;
+					/* Applying First Touch - Using threads to Alloc and Initialize G */
+					firstTouchAllocation(G, N, R, ilow-1, iupper-1);
+					callBarrier(barrier);
 					
+					/* Start Measuring Time Working Threads */
+					try {
+						synchronized(timerThreads){
+							timerThreads.start();
+						}
+					} catch (IllegalStateException e) {} // ignore start counter if watch was already started
 					SORRunner(G, id, omega, num_iterations, ilow, iupper, Mm1, Nm1, total_threads);
 				}
 			});
 			th[i].start();
 		}
 		
-		int iupper 		= slice + 1;
-		if (iupper > Mm1 || total_threads == 1) iupper =  Mm1+1;
-
-		/* Applying First Touch to MASTER */
-		G[0] = new double[N];		
-		for (int c=0; c<N; c++) {	
-			G[0][c] = R.nextDouble() * 1e-6;
+		int iter_per_thr = iterations / total_threads;
+		
+		//Threads that will receive the extra iterations (if any)
+		if (0 < (iterations % total_threads)){
+			iter_per_thr++;
 		}
-			
+		final int iupper = iter_per_thr * 2;
+		timerThreads.stop();
+		
+		/* Applying First Touch to MASTER */
+		firstTouchAllocation(G, N, R, 0, iupper);
+		callBarrier(barrier);
+
+		/* Start Measuring Time MASTER */
+		try {
+			synchronized(timerMaster){
+				timerMaster.start();
+			}
+		} catch (IllegalStateException e) {} // ignore start counter if watch was already started
 		SORRunner(G, 0, omega, num_iterations, 1, iupper, Mm1, Nm1, total_threads);		
+		killThreads(total_threads, th);
+		timerMaster.stop();
+		/******* End measuring time master *******/
+		
+		/* Computing time result */
+		final long timeElapsedThreads	= timerThreads.elapsed(TimeUnit.MILLISECONDS);
+		final long timeElapsedMaster	= timerMaster.elapsed(TimeUnit.MILLISECONDS);
+		System.out.println(timeElapsedThreads + timeElapsedMaster);
+		
+		sumTotalG(G, Nm1);
+	}	
 	
-		for(int i = 0 ; i < total_threads-1 ; i++)
-		{
+	
+	private void sumTotalG(double[][]G, final int Nm1){
+		
+		for (int i=1; i<Nm1; i++){
+			for (int j=1; j<Nm1; j++){
+				Gtotal += G[i][j];
+			}
+		}
+	}
+	
+	private void killThreads(final int total_threads, final Thread[] th){
+		
+		for(int i=0; i<total_threads-1; i++){
+			
 			try 
 			{
 				th[i].join();
 			}
 			catch (InterruptedException e) {}
 		}
+	}
+	
+	private void callBarrier(final CyclicBarrier barrier){
 		
-		final long end = System.currentTimeMillis();
-		System.out.println((end-begin) / 1000.0);
-		
-		for (int i = 1; i < Nm1; i++) 
+		try
 		{
-			for (int j = 1; j < Nm1; j++) 
-			{
-				Gtotal += G[i][j];
+			barrier.await();
+		}
+		catch (InterruptedException | BrokenBarrierException e)
+		{
+			e.printStackTrace();
+		}
+		
+	}
+	
+	private void firstTouchAllocation(double[][] G, int N, Random R, final int ilow, final int iupper){
+		
+		for (int i=ilow; i < iupper; i++)
+		{	
+			/* Allocation in Parallel */
+			G[i] = new double[N];
+				
+			/* Initialize in Parallel */
+			for (int j=0; j<N; j++) {
+				G[i][j] = R.nextDouble() * 1e-6;
 			}
-		}               
-
-	}	
+		}
+	}
+	
+	
+	
 	public final void SORRunner(	final double G[][], final int id, final double omega, 
 								final int num_iterations, final int ilow, final int iupper,
 								final int Mm1, final int Nm1, final int total_threads)

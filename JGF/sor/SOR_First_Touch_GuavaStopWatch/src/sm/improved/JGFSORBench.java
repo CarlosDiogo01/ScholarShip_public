@@ -21,14 +21,19 @@
 
 package sm.improved;
 
+import java.util.Random;
+
 public class JGFSORBench extends SOR{ 
 
   private int size; 
   private int datasizes[]={1000, 1500, 2000, 5000, 10000, 15000};
   private static final int JACOBI_NUM_ITER = 100;
+  private static final long RANDOM_SEED = 10101010;
   public static int nthreads;
   double ops;
 
+  Random R = new Random(RANDOM_SEED);
+  
   public JGFSORBench(int nt){
 	  super(nt);
 	  nthreads = nt;
@@ -49,7 +54,7 @@ public class JGFSORBench extends SOR{
 
 	  double G[][] = new double[datasizes[size]][];
 	  
-	  SORrun(1.25, G, datasizes[size], datasizes[size], JACOBI_NUM_ITER);
+	  SORrun(1.25, G, datasizes[size], datasizes[size], JACOBI_NUM_ITER, R);
   }
   
   public void JGFvalidate(){
